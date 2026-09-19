@@ -165,7 +165,10 @@ func (f *Parser) ParseURLWithContext(feedURL string, ctx context.Context) (feed 
 
 	if resp != nil {
 		defer func() {
-			if ce := resp.Body.Close(); ce != nil {
+			// A Close failure is only reported when nothing else went
+			// wrong: an HTTP status, read, or parse error already produced
+			// is more useful to the caller than a cleanup failure.
+			if ce := resp.Body.Close(); ce != nil && err == nil {
 				err = ce
 			}
 		}()
@@ -222,9 +225,11 @@ func (l *limitedReader) Read(p []byte) (int, error) {
 	n, err := l.r.Read(p)
 	if int64(n) > l.left {
 		n = int(l.left)
-		if err == nil || errors.Is(err, io.EOF) {
-			err = ErrResponseTooLarge
-		}
+		// Overflow takes priority over any error the same read delivered
+		// (including a non-EOF transport error from a chunked stream
+		// failing on its final chunk): the response is too large
+		// regardless of what else went wrong.
+		err = ErrResponseTooLarge
 	}
 	l.left -= int64(n)
 	l.err = err
@@ -305,6 +310,5 @@ func (f *Parser) httpClient() *http.Client {
 	if f.Client != nil {
 		return f.Client
 	}
-	f.Client = defaultClient
-	return f.Client
+	return defaultClient
 }
