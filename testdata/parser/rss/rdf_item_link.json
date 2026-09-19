@@ -1,0 +1,9 @@
+{
+    "items": [
+        {
+            "link": "http://example.org",
+            "links": [ "http://example.org" ]
+        }
+    ],
+    "version": "1.0"
+}

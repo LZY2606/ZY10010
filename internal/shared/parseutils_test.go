@@ -1,0 +1,147 @@
+package shared
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestDecodeEntities(t *testing.T) {
+	tests := []struct {
+		str string
+		res string
+	}{
+		{"", ""},
+		{"foo", "foo"},
+		{"skip & normal & amps", "skip & normal & amps"},
+		{"not & entity;hello &ne xt;one", "not & entity;hello &ne xt;one"},
+
+		{"&lt;foo&gt;", "<foo>"},
+		{"a &quot;b&quot; &apos;c&apos;", "a \"b\" 'c'"},
+		{"foo &amp;&amp; bar", "foo && bar"},
+
+		{"&#34;foo&#34;", "\"foo\""},
+		{"&#x61;&#x062;&#x0063;", "abc"},
+		{"r&#xe9;sum&#x00E9;", "résumé"},
+		{"r&eacute;sum&eacute;", "résumé"},
+		{"&", "&"},
+		{"&foo", "&foo"},
+		{"&lt", "&lt"},
+		{"&#", "&#"},
+
+		// A bare '&' must not stop later entities from decoding.
+		{"Fish & Chips &amp; more &lt;3", "Fish & Chips & more <3"},
+		{"a & b &amp; c & d &lt;e", "a & b & c & d <e"},
+		{"&unclosed &amp; ok", "&unclosed & ok"},
+		{"& &amp; &", "& & &"},
+
+		// Tab and newline also disqualify an entity candidate.
+		{"a &x\ty; &amp; b", "a &x\ty; & b"},
+		{"a &x\ny; &amp; b", "a &x\ny; & b"},
+
+		// A ';' beyond the entity-length window does not form an entity.
+		{"&" + strings.Repeat("x", 100) + "; &amp;", "&" + strings.Repeat("x", 100) + "; &"},
+
+		// HTML legacy no-semicolon rules must not decode entity prefixes
+		// inside spans that are not themselves entities.
+		{"?page=1&copy=2;mode=x", "?page=1&copy=2;mode=x"},
+		{"&copy=2;", "&copy=2;"},
+		{"&notit;", "&notit;"},
+		{"&foobar;", "&foobar;"},
+
+		// Real entities, including ones with legacy no-semicolon forms,
+		// still decode when the ';' belongs to them.
+		{"&copy; 2026", "© 2026"},
+		{"&not;x", "¬x"},
+		{"say &quot;hi&quot; &amp; bye", "say \"hi\" & bye"},
+	}
+
+	for _, test := range tests {
+		res := DecodeEntities(test.str)
+		assert.Equal(t, test.res, res,
+			"%q was decoded to %q instead of %q",
+			test.str, res, test.res)
+	}
+}
+
+func TestStripCDATA(t *testing.T) {
+	tests := []struct {
+		str string
+		res string
+	}{
+		{"<![CDATA[ test ]]>test", " test test"},
+		{"<![CDATA[test &]]> &lt;", "test & <"},
+		{"", ""},
+		{"test", "test"},
+		{"]]>", "]]>"},
+		{"<![CDATA[", "<![CDATA["},
+		{"<![CDATA[testtest", "<![CDATA[testtest"},
+
+		// Mixed text and CDATA: character data before or between CDATA
+		// sections is still character data and must be kept. These were
+		// silently dropped before (see #140).
+		{"before<![CDATA[mid]]>", "beforemid"},
+		{"A<![CDATA[B]]>C", "ABC"},
+		{"<![CDATA[A]]>MID<![CDATA[B]]>", "AMIDB"},
+		{"a<![CDATA[b]]>c<![CDATA[d]]>e", "abcde"},
+		{"&lt;p&gt;<![CDATA[<b>]]>", "<p><b>"},
+		{"x<![CDATA[]]>y", "xy"},
+		{"Breaking: <![CDATA[Big News]]>", "Breaking: Big News"},
+		{`<![CDATA[
+    Since this is a CDATA section
+    I can use all sorts of reserved characters
+    like > < " and &
+    or write things like
+    <foo></bar>
+    but my document is still well formed!
+]]>`, `
+    Since this is a CDATA section
+    I can use all sorts of reserved characters
+    like > < " and &
+    or write things like
+    <foo></bar>
+    but my document is still well formed!
+`},
+		{`<![CDATA[
+Within this Character Data block I can
+use double dashes as much as I want (along with <, &, ', and ")
+*and* %MyParamEntity; will be expanded to the text
+"Has been expanded" ... however, I can't use
+the CEND sequence. If I need to use CEND I must escape one of the
+brackets or the greater-than sign using concatenated CDATA sections.
+]]>`, `
+Within this Character Data block I can
+use double dashes as much as I want (along with <, &, ', and ")
+*and* %MyParamEntity; will be expanded to the text
+"Has been expanded" ... however, I can't use
+the CEND sequence. If I need to use CEND I must escape one of the
+brackets or the greater-than sign using concatenated CDATA sections.
+`},
+		// 		{`<![CDATA[ test ]]><!--
+		// Within this comment I can use ]]>
+		// and other reserved characters like <
+		// &, ', and ", but %MyParamEntity; will not be expanded
+		// (if I retrieve the text of this node it will contain
+		// %MyParamEntity; and not "Has been expanded")
+		// and I can't place two dashes next to each other.
+		// -->`, ` test <!--
+		// Within this comment I can use ]]>
+		// and other reserved characters like <
+		// &, ', and ", but %MyParamEntity; will not be expanded
+		// (if I retrieve the text of this node it will contain
+		// %MyParamEntity; and not "Has been expanded")
+		// and I can't place two dashes next to each other.
+		// -->`,
+		// 		},
+		{`<![CDATA[ test ]]><!-- test -->`, ` test <!-- test -->`}, // TODO: probably wrong
+		{`An example of escaped CENDs`, `An example of escaped CENDs`},
+		{`<![CDATA[This text contains a CEND ]]]]><![CDATA[>]]>`, `This text contains a CEND ]]>`},
+		{`<![CDATA[This text contains a CEND ]]]><![CDATA[]>]]>`, `This text contains a CEND ]]>`},
+	}
+
+	for _, test := range tests {
+		res := StripCDATA(test.str)
+		assert.Equal(t, test.res, res)
+	}
+}

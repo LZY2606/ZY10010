@@ -1,0 +1,68 @@
+package gofeed_test
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+	"testing"
+	"testing/iotest"
+
+	"github.com/mmcdole/gofeed"
+	"github.com/mmcdole/gofeed/internal/testutil"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestDetectFeedType(t *testing.T) {
+	var feedTypeTests = []struct {
+		file     string
+		expected gofeed.FeedType
+	}{
+		{"atom03_feed.xml", gofeed.FeedTypeAtom},
+		{"atom10_feed.xml", gofeed.FeedTypeAtom},
+		{"rss_feed.xml", gofeed.FeedTypeRSS},
+		{"rss_feed_bom.xml", gofeed.FeedTypeRSS},
+		{"rss_feed_leading_spaces.xml", gofeed.FeedTypeRSS},
+		{"rdf_feed.xml", gofeed.FeedTypeRSS},
+		{"unknown_feed.xml", gofeed.FeedTypeUnknown},
+		{"empty_feed.xml", gofeed.FeedTypeUnknown},
+		{"json10_feed.json", gofeed.FeedTypeJSON},
+	}
+
+	for _, test := range feedTypeTests {
+		t.Run(test.file, func(t *testing.T) {
+			data := testutil.ReadFile(t, "testdata/parser/universal/"+test.file)
+			actual := gofeed.DetectFeedType(bytes.NewReader(data))
+			assert.Equal(t, test.expected, actual)
+		})
+	}
+}
+
+// Examples
+
+func ExampleDetectFeedType() {
+	feedData := `<rss version="2.0">
+<channel>
+<title>Sample Feed</title>
+</channel>
+</rss>`
+	feedType := gofeed.DetectFeedType(strings.NewReader(feedData))
+	if feedType == gofeed.FeedTypeRSS {
+		fmt.Println("Wow! This is an RSS feed!")
+	}
+}
+
+// A reader that fails mid-stream must yield FeedTypeUnknown, not a type
+// guessed from the partial prefix (issue #311).
+func TestDetectFeedType_ReaderError(t *testing.T) {
+	r := io.MultiReader(strings.NewReader(`<rss version="2.0"></rss>`), iotest.ErrReader(errors.New("boom")))
+	assert.Equal(t, gofeed.FeedTypeUnknown, gofeed.DetectFeedType(r))
+}
+
+// JSON detection must work from a bounded prefix; the JSON parser validates
+// the complete document after detection (issue #344).
+func TestDetectFeedType_JSONPrefix(t *testing.T) {
+	prefix := `{"version":"https://jsonfeed.org/version/1.1","items":[{`
+	assert.Equal(t, gofeed.FeedTypeJSON, gofeed.DetectFeedType(strings.NewReader(prefix)))
+}
